@@ -5,9 +5,11 @@ typedef CameraFrameCallback = void Function(CameraImage image);
 
 class CameraService {
   CameraController? _controller;
+  CameraDescription? _camera;
   bool _isStreamingFrames = false;
 
   CameraController? get controller => _controller;
+  CameraDescription? get camera => _camera;
 
   Future<CameraController> initialize({CameraFrameCallback? onFrame}) async {
     final cameras = await availableCameras();
@@ -25,11 +27,12 @@ class CameraService {
       ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: defaultTargetPlatform == TargetPlatform.android
-          ? ImageFormatGroup.yuv420
+          ? ImageFormatGroup.nv21
           : ImageFormatGroup.bgra8888,
     );
 
     await controller.initialize();
+    _camera = camera;
     _controller = controller;
 
     if (onFrame != null) {
@@ -67,5 +70,6 @@ class CameraService {
     await stopFrameStream();
     await _controller?.dispose();
     _controller = null;
+    _camera = null;
   }
 }

@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../camera/camera_service.dart';
+import '../pose/pose_detection_service.dart';
 
 class CameraPreviewScreen extends StatefulWidget {
   const CameraPreviewScreen({super.key});
@@ -15,10 +17,12 @@ class CameraPreviewScreen extends StatefulWidget {
 class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     with WidgetsBindingObserver {
   final CameraService _cameraService = CameraService();
+  final PoseDetectionService _poseDetectionService = PoseDetectionService();
 
   CameraController? _controller;
   Future<void>? _initializeCameraFuture;
   String? _errorMessage;
+  bool _isPoseDetected = false;
 
   @override
   void initState() {
@@ -54,7 +58,35 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
   }
 
   void _handleCameraFrame(CameraImage image) {
-    // Phase 1 only prepares the frame stream. Frame processing starts later.
+    final camera = _cameraService.camera;
+    final controller = _controller;
+    if (camera == null ||
+        controller == null ||
+        !controller.value.isInitialized) {
+      return;
+    }
+
+    unawaited(_detectPose(image, camera, controller.value.deviceOrientation));
+  }
+
+  Future<void> _detectPose(
+    CameraImage image,
+    CameraDescription camera,
+    DeviceOrientation deviceOrientation,
+  ) async {
+    final result = await _poseDetectionService.detectFromCameraImage(
+      image: image,
+      camera: camera,
+      deviceOrientation: deviceOrientation,
+    );
+
+    if (!mounted || result == null || result.detected == _isPoseDetected) {
+      return;
+    }
+
+    setState(() {
+      _isPoseDetected = result.detected;
+    });
   }
 
   String _messageForCameraException(CameraException error) {
@@ -89,6 +121,7 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_cameraService.dispose());
+    unawaited(_poseDetectionService.dispose());
     super.dispose();
   }
 
@@ -110,11 +143,39 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
             return const Center(child: CircularProgressIndicator());
           }
 
-          return Center(
-            child: AspectRatio(
-              aspectRatio: controller.value.aspectRatio,
-              child: CameraPreview(controller),
-            ),
+          return Stack(
+            children: [
+              Center(
+                child: AspectRatio(
+                  aspectRatio: controller.value.aspectRatio,
+                  child: CameraPreview(controller),
+                ),
+              ),
+              Positioned(
+                left: 16,
+                top: 48,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    child: Text(
+                      _isPoseDetected ? 'Pose detected' : 'No pose',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),
