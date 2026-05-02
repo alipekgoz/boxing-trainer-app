@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import 'camera_image_converter.dart';
+import 'pose_landmark.dart';
 import 'pose_result.dart';
 
 class PoseDetectionService {
@@ -48,6 +49,7 @@ class PoseDetectionService {
       return PoseResult(
         detected: poses.isNotEmpty,
         landmarkCount: landmarkCount,
+        landmarks: poses.isEmpty ? const {} : _extractLandmarks(poses.first),
       );
     } catch (_) {
       return const PoseResult.none();
@@ -69,5 +71,25 @@ class PoseDetectionService {
     return DateTime.now().difference(lastProcessedAt) < frameInterval;
   }
 
+  Map<BodyLandmarkType, BodyLandmark> _extractLandmarks(Pose pose) {
+    return {
+      for (final entry in _landmarkTypes.entries)
+        if (pose.landmarks[entry.value] case final landmark?)
+          entry.key: BodyLandmark(
+            x: landmark.x,
+            y: landmark.y,
+            z: landmark.z,
+            likelihood: landmark.likelihood,
+          ),
+    };
+  }
+
   Future<void> dispose() => _poseDetector.close();
 }
+
+const Map<BodyLandmarkType, PoseLandmarkType> _landmarkTypes = {
+  BodyLandmarkType.leftShoulder: PoseLandmarkType.leftShoulder,
+  BodyLandmarkType.rightShoulder: PoseLandmarkType.rightShoulder,
+  BodyLandmarkType.leftWrist: PoseLandmarkType.leftWrist,
+  BodyLandmarkType.rightWrist: PoseLandmarkType.rightWrist,
+};

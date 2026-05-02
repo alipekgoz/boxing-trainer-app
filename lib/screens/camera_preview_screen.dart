@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 
 import '../camera/camera_service.dart';
 import '../pose/pose_detection_service.dart';
+import '../punch/punch_detection_service.dart';
+import '../punch/punch_type.dart';
 
 class CameraPreviewScreen extends StatefulWidget {
   const CameraPreviewScreen({super.key});
@@ -18,11 +20,12 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     with WidgetsBindingObserver {
   final CameraService _cameraService = CameraService();
   final PoseDetectionService _poseDetectionService = PoseDetectionService();
+  final PunchDetectionService _punchDetectionService = PunchDetectionService();
 
   CameraController? _controller;
   Future<void>? _initializeCameraFuture;
   String? _errorMessage;
-  bool _isPoseDetected = false;
+  PunchType _detectedPunch = PunchType.none;
 
   @override
   void initState() {
@@ -80,13 +83,16 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
       deviceOrientation: deviceOrientation,
     );
 
-    if (!mounted || result == null || result.detected == _isPoseDetected) {
+    if (!mounted || result == null) {
       return;
     }
 
-    setState(() {
-      _isPoseDetected = result.detected;
-    });
+    final punch = _punchDetectionService.detect(result);
+    if (punch != _detectedPunch) {
+      setState(() {
+        _detectedPunch = punch;
+      });
+    }
   }
 
   String _messageForCameraException(CameraException error) {
@@ -110,6 +116,7 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     }
 
     if (state == AppLifecycleState.inactive) {
+      _punchDetectionService.reset();
       unawaited(_cameraService.dispose());
       _controller = null;
     } else if (state == AppLifecycleState.resumed) {
@@ -122,6 +129,7 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_cameraService.dispose());
     unawaited(_poseDetectionService.dispose());
+    _punchDetectionService.reset();
     super.dispose();
   }
 
@@ -165,7 +173,7 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
                       vertical: 6,
                     ),
                     child: Text(
-                      _isPoseDetected ? 'Pose detected' : 'No pose',
+                      _detectedPunch.label,
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 13,
