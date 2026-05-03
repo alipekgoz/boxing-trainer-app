@@ -8,7 +8,7 @@ class PunchDetectionConfig {
     this.mirrorMode = true,
     this.jabHand = PunchHand.left,
     this.minLandmarkLikelihood = 0.45,
-    this.minForwardDelta = 0.18,
+    this.minForwardDelta = 0.12,
     this.minElbowForwardDelta = 0.04,
     this.minWristVelocity = 1.1,
     this.minExtensionFromShoulder = 0.75,

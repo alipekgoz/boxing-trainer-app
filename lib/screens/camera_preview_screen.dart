@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../camera/camera_service.dart';
+import '../game/boxing_combo_game.dart';
 import '../pose/pose_detection_service.dart';
 import '../punch/punch_detection_config.dart';
+import '../punch/punch_detection_debug.dart';
 import '../punch/punch_detection_service.dart';
 import '../punch/punch_type.dart';
 
@@ -19,7 +21,10 @@ class CameraPreviewScreen extends StatefulWidget {
 
 class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     with WidgetsBindingObserver {
+  static const Duration _debugConsoleLogInterval = Duration(seconds: 1);
+
   final CameraService _cameraService = CameraService();
+  final BoxingComboGame _comboGame = BoxingComboGame();
   final PoseDetectionService _poseDetectionService = PoseDetectionService();
   PunchDetectionService _punchDetectionService = PunchDetectionService(
     config: const PunchDetectionConfig(
@@ -32,6 +37,10 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
   Future<void>? _initializeCameraFuture;
   String? _errorMessage;
   PunchType _detectedPunch = PunchType.none;
+  DateTime? _lastDebugConsoleLogAt;
+  String _debugOverlayReason = 'noPrev';
+  String? _lastLeftDebugLog;
+  String? _lastRightDebugLog;
 
   @override
   void initState() {
@@ -98,11 +107,18 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     }
 
     final punch = _punchDetectionService.detect(result);
-    if (punch != _detectedPunch) {
-      setState(() {
-        _detectedPunch = punch;
-      });
+    if (punch != PunchType.none) {
+      _comboGame.processPunch(punch);
     }
+
+    final debugReadoutChanged = _refreshDebugReadout();
+    if (punch == _detectedPunch && !debugReadoutChanged) {
+      return;
+    }
+
+    setState(() {
+      _detectedPunch = punch;
+    });
   }
 
   String _messageForCameraException(CameraException error) {
@@ -127,6 +143,8 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
 
     if (state == AppLifecycleState.inactive) {
       _punchDetectionService.reset();
+      _comboGame.reset();
+      _resetDebugOverlay();
       unawaited(_cameraService.dispose());
       _controller = null;
     } else if (state == AppLifecycleState.resumed) {
@@ -140,6 +158,8 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     unawaited(_cameraService.dispose());
     unawaited(_poseDetectionService.dispose());
     _punchDetectionService.reset();
+    _comboGame.reset();
+    _resetDebugOverlay();
     super.dispose();
   }
 
@@ -183,10 +203,11 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
                       vertical: 6,
                     ),
                     child: Text(
-                      _detectedPunch.label,
+                      'Detected: ${_detectedPunch.label}\n'
+                      'Reason: $_debugOverlayReason',
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 13,
+                        fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -201,12 +222,120 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
   }
 
   Widget _buildCameraPreview(CameraController controller) {
-    final preview = CameraPreview(controller);
-    if (controller.description.lensDirection != CameraLensDirection.front) {
-      return preview;
+    return CameraPreview(controller);
+  }
+
+  bool _refreshDebugReadout() {
+    final debug = _punchDetectionService.lastDebug;
+    final nextReason = _shortReason(debug.reason);
+    _logDebugReadout(debug);
+
+    final changed = nextReason != _debugOverlayReason;
+    _debugOverlayReason = nextReason;
+    return changed;
+  }
+
+  void _logDebugReadout(PunchDetectionDebug debug) {
+    final now = DateTime.now();
+    final lastLog = _lastDebugConsoleLogAt;
+    if (lastLog != null && now.difference(lastLog) < _debugConsoleLogInterval) {
+      return;
     }
 
-    return Transform.scale(scaleX: -1, child: preview);
+    final config = debug.config;
+    final leftLog = _stableHandDebugLog(
+      label: 'L',
+      hand: debug.left,
+      config: config,
+      previousLog: _lastLeftDebugLog,
+      fallbackReason: _shortReason(debug.reason),
+    );
+    final rightLog = _stableHandDebugLog(
+      label: 'R',
+      hand: debug.right,
+      config: config,
+      previousLog: _lastRightDebugLog,
+      fallbackReason: _shortReason(debug.reason),
+    );
+
+    if (debug.left != null) {
+      _lastLeftDebugLog = leftLog;
+    }
+    if (debug.right != null) {
+      _lastRightDebugLog = rightLog;
+    }
+
+    debugPrint(
+      'PunchDebug reason=${_shortReason(debug.reason)} '
+      'detected=${debug.detectedPunch.label} | $leftLog | $rightLog',
+    );
+    _lastDebugConsoleLogAt = now;
+  }
+
+  String _fmt(double value) => value.toStringAsFixed(2);
+  String _fmtCompact(double value) => value.toStringAsFixed(1);
+
+  String _stableHandDebugLog({
+    required String label,
+    required PunchHandDebug? hand,
+    required PunchDetectionConfig config,
+    required String? previousLog,
+    required String fallbackReason,
+  }) {
+    if (hand == null) {
+      return previousLog ?? '$label $fallbackReason';
+    }
+
+    return '$label FWD=${_fmt(hand.extensionDelta)}/${_fmt(config.minForwardDelta)} '
+        'VEL=${_fmtCompact(hand.wristVelocity)}/${_fmtCompact(config.minWristVelocity)} '
+        'SCORE=${_fmt(hand.rawMovementScore)}/${_fmt(config.minMovementScore)} '
+        'fail=${_failText(hand.failedThresholds)}';
+  }
+
+  void _resetDebugOverlay() {
+    _lastDebugConsoleLogAt = null;
+    _lastLeftDebugLog = null;
+    _lastRightDebugLog = null;
+    _debugOverlayReason = 'noPrev';
+  }
+
+  String _shortReason(PunchDetectionDebugReason reason) {
+    return switch (reason) {
+      PunchDetectionDebugReason.waitingForPreviousFrame => 'noPrev',
+      PunchDetectionDebugReason.noPose => 'noPose',
+      PunchDetectionDebugReason.missingLandmarks => 'missing/lowConf',
+      PunchDetectionDebugReason.invalidScale => 'badScale',
+      PunchDetectionDebugReason.cooldown => 'cooldown',
+      PunchDetectionDebugReason.frameGap => 'gap',
+      PunchDetectionDebugReason.belowThreshold => 'below',
+      PunchDetectionDebugReason.ambiguous => 'ambig',
+      PunchDetectionDebugReason.leftSelected => 'left',
+      PunchDetectionDebugReason.rightSelected => 'right',
+    };
+  }
+
+  String _failText(List<String> failedThresholds) {
+    if (failedThresholds.isEmpty) {
+      return 'none';
+    }
+
+    return failedThresholds.take(4).map(_thresholdCode).join(',');
+  }
+
+  String _thresholdCode(String threshold) {
+    return switch (threshold) {
+      'minForwardDelta' => 'FWD',
+      'minElbowForwardDelta' => 'ELB',
+      'minWristVelocity' => 'VEL',
+      'minExtensionFromShoulder' => 'EXT',
+      'minWristAheadOfElbow' => 'AHEAD',
+      'minArmStraightness' => 'STR',
+      'minArmStraightnessDelta' => 'STRD',
+      'maxVerticalDelta' => 'VERT',
+      'minMovementScore' => 'SCORE',
+      'elapsed' => 'TIME',
+      _ => threshold,
+    };
   }
 
   PunchDetectionConfig _punchConfigForCamera(CameraDescription camera) {
