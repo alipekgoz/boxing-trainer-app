@@ -11,14 +11,17 @@ class CameraService {
   CameraController? get controller => _controller;
   CameraDescription? get camera => _camera;
 
-  Future<CameraController> initialize({CameraFrameCallback? onFrame}) async {
+  Future<CameraController> initialize({
+    CameraFrameCallback? onFrame,
+    CameraLensDirection preferredLensDirection = CameraLensDirection.front,
+  }) async {
     final cameras = await availableCameras();
     if (cameras.isEmpty) {
       throw CameraException('NoCameraFound', 'No camera is available.');
     }
 
     final camera = cameras.firstWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.back,
+      (camera) => camera.lensDirection == preferredLensDirection,
       orElse: () => cameras.first,
     );
 

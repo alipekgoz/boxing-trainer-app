@@ -1,4 +1,11 @@
-enum BodyLandmarkType { leftShoulder, rightShoulder, leftWrist, rightWrist }
+enum BodyLandmarkType {
+  leftShoulder,
+  rightShoulder,
+  leftElbow,
+  rightElbow,
+  leftWrist,
+  rightWrist,
+}
 
 class BodyLandmark {
   const BodyLandmark({

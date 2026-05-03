@@ -90,6 +90,8 @@ class PoseDetectionService {
 const Map<BodyLandmarkType, PoseLandmarkType> _landmarkTypes = {
   BodyLandmarkType.leftShoulder: PoseLandmarkType.leftShoulder,
   BodyLandmarkType.rightShoulder: PoseLandmarkType.rightShoulder,
+  BodyLandmarkType.leftElbow: PoseLandmarkType.leftElbow,
+  BodyLandmarkType.rightElbow: PoseLandmarkType.rightElbow,
   BodyLandmarkType.leftWrist: PoseLandmarkType.leftWrist,
   BodyLandmarkType.rightWrist: PoseLandmarkType.rightWrist,
 };

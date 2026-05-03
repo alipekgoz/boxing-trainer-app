@@ -15,7 +15,7 @@ class PunchDetectionService {
 
   PunchType detect(PoseResult pose, {DateTime? timestamp}) {
     final now = timestamp ?? DateTime.now();
-    final frame = _PunchFrame.fromPose(pose, config);
+    final frame = _PunchFrame.fromPose(pose, config, now);
     if (frame == null) {
       _previousFrame = null;
       return PunchType.none;
@@ -23,7 +23,9 @@ class PunchDetectionService {
 
     final previous = _previousFrame;
     _previousFrame = frame;
-    if (previous == null || _isCoolingDown(now)) {
+    if (previous == null ||
+        _isCoolingDown(now) ||
+        frame.timestamp.difference(previous.timestamp) > config.maxFrameGap) {
       return PunchType.none;
     }
 
@@ -31,14 +33,23 @@ class PunchDetectionService {
       previous.left,
       frame.left,
       frame.shoulderWidth,
+      frame.timestamp.difference(previous.timestamp),
     );
     final rightScore = _scoreHand(
       previous.right,
       frame.right,
       frame.shoulderWidth,
+      frame.timestamp.difference(previous.timestamp),
     );
 
     if (leftScore <= 0 && rightScore <= 0) {
+      return PunchType.none;
+    }
+
+    final scoreGap = (leftScore - rightScore).abs();
+    if (leftScore > 0 &&
+        rightScore > 0 &&
+        scoreGap < config.ambiguousScoreMargin) {
       return PunchType.none;
     }
 
@@ -57,16 +68,42 @@ class PunchDetectionService {
     return lastPunchAt != null && now.difference(lastPunchAt) < config.cooldown;
   }
 
-  double _scoreHand(_HandFrame previous, _HandFrame current, double scale) {
-    final extensionDelta = current.extension - previous.extension;
+  double _scoreHand(
+    _ArmFrame previous,
+    _ArmFrame current,
+    double scale,
+    Duration elapsed,
+  ) {
+    final elapsedSeconds =
+        elapsed.inMicroseconds / Duration.microsecondsPerSecond;
+    if (elapsedSeconds <= 0) {
+      return 0;
+    }
+
+    final extensionDelta = current.wristReach - previous.wristReach;
+    final elbowDelta = current.elbowReach - previous.elbowReach;
+    final wristVelocity = extensionDelta / elapsedSeconds;
+    final straightnessDelta = current.straightness - previous.straightness;
     final verticalDelta = (current.wrist.y - previous.wrist.y).abs() / scale;
     if (extensionDelta < config.minForwardDelta ||
-        current.extension < config.minExtensionFromShoulder ||
+        elbowDelta < config.minElbowForwardDelta ||
+        wristVelocity < config.minWristVelocity ||
+        current.wristReach < config.minExtensionFromShoulder ||
+        current.wristAheadOfElbow < config.minWristAheadOfElbow ||
+        current.straightness < config.minArmStraightness ||
+        straightnessDelta < config.minArmStraightnessDelta ||
         verticalDelta > config.maxVerticalDelta) {
       return 0;
     }
 
-    return extensionDelta;
+    final movementScore =
+        (extensionDelta * 1.7) +
+        (elbowDelta * 0.8) +
+        (wristVelocity * 0.16) +
+        (straightnessDelta * 0.7) +
+        (current.wristAheadOfElbow * 0.35);
+
+    return movementScore >= config.minMovementScore ? movementScore : 0;
   }
 
   PunchType _typeForHand(PunchHand hand) {
@@ -85,27 +122,39 @@ class _PunchFrame {
     required this.left,
     required this.right,
     required this.shoulderWidth,
+    required this.timestamp,
   });
 
-  final _HandFrame left;
-  final _HandFrame right;
+  final _ArmFrame left;
+  final _ArmFrame right;
   final double shoulderWidth;
+  final DateTime timestamp;
 
-  static _PunchFrame? fromPose(PoseResult pose, PunchDetectionConfig config) {
+  static _PunchFrame? fromPose(
+    PoseResult pose,
+    PunchDetectionConfig config,
+    DateTime timestamp,
+  ) {
     if (!pose.detected) {
       return null;
     }
 
     final leftShoulder = pose.landmarks[BodyLandmarkType.leftShoulder];
     final rightShoulder = pose.landmarks[BodyLandmarkType.rightShoulder];
+    final leftElbow = pose.landmarks[BodyLandmarkType.leftElbow];
+    final rightElbow = pose.landmarks[BodyLandmarkType.rightElbow];
     final leftWrist = pose.landmarks[BodyLandmarkType.leftWrist];
     final rightWrist = pose.landmarks[BodyLandmarkType.rightWrist];
     if (leftShoulder == null ||
         rightShoulder == null ||
+        leftElbow == null ||
+        rightElbow == null ||
         leftWrist == null ||
         rightWrist == null ||
         !_isReliable(leftShoulder, config) ||
         !_isReliable(rightShoulder, config) ||
+        !_isReliable(leftElbow, config) ||
+        !_isReliable(rightElbow, config) ||
         !_isReliable(leftWrist, config) ||
         !_isReliable(rightWrist, config)) {
       return null;
@@ -117,9 +166,22 @@ class _PunchFrame {
     }
 
     return _PunchFrame(
-      left: _HandFrame.fromLandmarks(leftWrist, leftShoulder, shoulderWidth),
-      right: _HandFrame.fromLandmarks(rightWrist, rightShoulder, shoulderWidth),
+      left: _ArmFrame.fromLandmarks(
+        shoulder: leftShoulder,
+        elbow: leftElbow,
+        wrist: leftWrist,
+        shoulderWidth: shoulderWidth,
+        sideDirection: leftShoulder.x <= rightShoulder.x ? -1 : 1,
+      ),
+      right: _ArmFrame.fromLandmarks(
+        shoulder: rightShoulder,
+        elbow: rightElbow,
+        wrist: rightWrist,
+        shoulderWidth: shoulderWidth,
+        sideDirection: rightShoulder.x >= leftShoulder.x ? 1 : -1,
+      ),
       shoulderWidth: shoulderWidth,
+      timestamp: timestamp,
     );
   }
 
@@ -128,22 +190,82 @@ class _PunchFrame {
   }
 }
 
-class _HandFrame {
-  const _HandFrame({required this.wrist, required this.extension});
+class _ArmFrame {
+  const _ArmFrame({
+    required this.wrist,
+    required this.wristReach,
+    required this.elbowReach,
+    required this.wristAheadOfElbow,
+    required this.straightness,
+  });
 
   final BodyLandmark wrist;
-  final double extension;
+  final double wristReach;
+  final double elbowReach;
+  final double wristAheadOfElbow;
+  final double straightness;
 
-  factory _HandFrame.fromLandmarks(
-    BodyLandmark wrist,
-    BodyLandmark shoulder,
-    double shoulderWidth,
-  ) {
-    final dx = wrist.x - shoulder.x;
-    final dy = wrist.y - shoulder.y;
-    final planarDistance = math.sqrt((dx * dx) + (dy * dy)) / shoulderWidth;
-    final depthReach = (shoulder.z - wrist.z) / shoulderWidth;
+  factory _ArmFrame.fromLandmarks({
+    required BodyLandmark shoulder,
+    required BodyLandmark elbow,
+    required BodyLandmark wrist,
+    required double shoulderWidth,
+    required int sideDirection,
+  }) {
+    final wristReach = _forwardReach(
+      point: wrist,
+      origin: shoulder,
+      shoulderWidth: shoulderWidth,
+      sideDirection: sideDirection,
+    );
+    final elbowReach = _forwardReach(
+      point: elbow,
+      origin: shoulder,
+      shoulderWidth: shoulderWidth,
+      sideDirection: sideDirection,
+    );
 
-    return _HandFrame(wrist: wrist, extension: planarDistance + depthReach);
+    return _ArmFrame(
+      wrist: wrist,
+      wristReach: wristReach,
+      elbowReach: elbowReach,
+      wristAheadOfElbow: wristReach - elbowReach,
+      straightness: _armStraightness(shoulder, elbow, wrist),
+    );
   }
+}
+
+double _forwardReach({
+  required BodyLandmark point,
+  required BodyLandmark origin,
+  required double shoulderWidth,
+  required int sideDirection,
+}) {
+  final lateralReach = ((point.x - origin.x) * sideDirection) / shoulderWidth;
+  final depthReach = (origin.z - point.z) / shoulderWidth;
+  return lateralReach + (depthReach * 0.45);
+}
+
+double _armStraightness(
+  BodyLandmark shoulder,
+  BodyLandmark elbow,
+  BodyLandmark wrist,
+) {
+  final upperArmX = shoulder.x - elbow.x;
+  final upperArmY = shoulder.y - elbow.y;
+  final forearmX = wrist.x - elbow.x;
+  final forearmY = wrist.y - elbow.y;
+  final upperLength = math.sqrt(
+    (upperArmX * upperArmX) + (upperArmY * upperArmY),
+  );
+  final forearmLength = math.sqrt(
+    (forearmX * forearmX) + (forearmY * forearmY),
+  );
+  if (upperLength <= 0 || forearmLength <= 0) {
+    return 0;
+  }
+
+  final dot = (upperArmX * forearmX) + (upperArmY * forearmY);
+  final cosine = (dot / (upperLength * forearmLength)).clamp(-1.0, 1.0);
+  return (1 - cosine) / 2;
 }

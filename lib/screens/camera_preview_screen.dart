@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../camera/camera_service.dart';
 import '../pose/pose_detection_service.dart';
+import '../punch/punch_detection_config.dart';
 import '../punch/punch_detection_service.dart';
 import '../punch/punch_type.dart';
 
@@ -20,7 +21,12 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
     with WidgetsBindingObserver {
   final CameraService _cameraService = CameraService();
   final PoseDetectionService _poseDetectionService = PoseDetectionService();
-  final PunchDetectionService _punchDetectionService = PunchDetectionService();
+  PunchDetectionService _punchDetectionService = PunchDetectionService(
+    config: const PunchDetectionConfig(
+      cameraFacing: PunchCameraFacing.front,
+      mirrorMode: true,
+    ),
+  );
 
   CameraController? _controller;
   Future<void>? _initializeCameraFuture;
@@ -44,6 +50,10 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
         await _cameraService.dispose();
         return;
       }
+
+      _punchDetectionService = PunchDetectionService(
+        config: _punchConfigForCamera(controller.description),
+      );
 
       setState(() {
         _controller = controller;
@@ -156,7 +166,7 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
               Center(
                 child: AspectRatio(
                   aspectRatio: controller.value.aspectRatio,
-                  child: CameraPreview(controller),
+                  child: _buildCameraPreview(controller),
                 ),
               ),
               Positioned(
@@ -187,6 +197,25 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen>
           );
         },
       ),
+    );
+  }
+
+  Widget _buildCameraPreview(CameraController controller) {
+    final preview = CameraPreview(controller);
+    if (controller.description.lensDirection != CameraLensDirection.front) {
+      return preview;
+    }
+
+    return Transform.scale(scaleX: -1, child: preview);
+  }
+
+  PunchDetectionConfig _punchConfigForCamera(CameraDescription camera) {
+    final isFrontCamera = camera.lensDirection == CameraLensDirection.front;
+    return PunchDetectionConfig(
+      cameraFacing: isFrontCamera
+          ? PunchCameraFacing.front
+          : PunchCameraFacing.rear,
+      mirrorMode: isFrontCamera,
     );
   }
 }
